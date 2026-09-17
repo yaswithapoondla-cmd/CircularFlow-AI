@@ -1,0 +1,36 @@
+# ── Web Framework ─────────────────────────────────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+
+# ── Validation & Config ───────────────────────────────────────────────────────
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+python-dotenv>=1.0.1
+
+# ── Database — SQLAlchemy ORM + Alembic Migrations ────────────────────────────
+sqlalchemy>=2.0.0
+alembic>=1.13.0
+
+# ── PostgreSQL Driver (primary — Phase 13) ────────────────────────────────────
+# psycopg2-binary is a pre-compiled binary wheel that works without a local
+# PostgreSQL installation.  It supports all hosted providers (Neon, Supabase,
+# Railway, AWS RDS, ElephantSQL, etc.) via the postgresql:// URL scheme.
+psycopg2-binary>=2.9.9
+
+# ── Alternative PostgreSQL driver (async-capable, optional) ───────────────────
+# If you prefer the newer psycopg v3 driver (async support, better performance),
+# uncomment the line below and comment out psycopg2-binary above:
+# psycopg[binary]>=3.1.0
+
+# ── Phase 14 & 15: Vector DB & LLM Integration ───────────────────────────────
+chromadb>=0.4.0
+openai>=1.0.0
+
+# ── Phase 17: Authentication & Security ───────────────────────────────────────
+bcrypt>=4.0.0
+pyjwt>=2.8.0
+
+# ── Phase 18: PDF Generation ──────────────────────────────────────────────────
+reportlab>=4.0.0
+
+
