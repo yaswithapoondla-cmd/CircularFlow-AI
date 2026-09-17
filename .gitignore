@@ -38,3 +38,6 @@ venv/
 *.db
 *.sqlite
 *.sqlite3
+
+backend/chroma_data/
+backend/test_circular.pdf
