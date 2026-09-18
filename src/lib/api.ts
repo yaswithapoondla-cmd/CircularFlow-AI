@@ -5,7 +5,8 @@
  * Features graceful fallbacks so frontend remains 100% functional even if the backend is offline.
  */
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8001';
+const rawApiBase = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8001';
+export const API_BASE_URL = rawApiBase.replace(/\/+$/, '');
 
 export interface HealthStatus {
   status: string;
