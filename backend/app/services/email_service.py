@@ -905,3 +905,79 @@ def _write_audit(
     except Exception as exc:  # noqa: BLE001
         logger.error("[EmailService] Failed to write audit log: %s", exc)
 
+
+def test_resend_connectivity() -> dict:
+    """
+    Send exactly one test email using the existing Resend integration.
+    From: onboarding@resend.dev
+    To: delivered@resend.dev
+    Subject: CircularFlow AI Resend Connectivity Test
+    Body: This is a temporary connectivity test for CircularFlow AI.
+
+    Returns a dict with:
+      - success: bool
+      - provider: "resend"
+      - status_code: int or None
+      - error/details: sanitized strings (if failed)
+      - message: str (if successful)
+
+    Never returns or logs EMAIL_PROVIDER_API_KEY or any secret.
+    Creates NO database records.
+    """
+    config = _get_config()
+    api_key = config.get("api_key", "").strip()
+    if not api_key:
+        return {
+            "success": False,
+            "provider": "resend",
+            "status_code": None,
+            "error": "EMAIL_PROVIDER_API_KEY is not configured on the server.",
+        }
+
+    from_addr = "onboarding@resend.dev"
+    from_name = "CircularFlow AI"
+    to_email = "delivered@resend.dev"
+    to_name = "Resend Test Delivery"
+    subject = "CircularFlow AI Resend Connectivity Test"
+    body_text = "This is a temporary connectivity test for CircularFlow AI."
+    html_text = f"<p>{body_text}</p>"
+
+    try:
+        _send_via_resend(
+            api_key=api_key,
+            from_addr=from_addr,
+            from_name=from_name,
+            to_email=to_email,
+            to_name=to_name,
+            subject=subject,
+            html=html_text,
+            plain=body_text,
+        )
+        return {
+            "success": True,
+            "provider": "resend",
+            "status_code": 200,
+            "message": "Test email successfully accepted by Resend API.",
+        }
+    except ResendAPIError as exc:
+        safe_msg = _sanitize_error_text(exc.error_message, api_key=api_key)
+        safe_body = _sanitize_error_text(exc.response_body, api_key=api_key)
+        res = {
+            "success": False,
+            "provider": "resend",
+            "status_code": exc.status_code,
+            "error_code": exc.error_name,
+            "error": safe_msg or f"HTTP {exc.status_code}",
+        }
+        if safe_body and safe_body != safe_msg:
+            res["details"] = safe_body[:400]
+        return res
+    except Exception as exc:
+        safe_err = _sanitize_error_text(str(exc), api_key=api_key)
+        return {
+            "success": False,
+            "provider": "resend",
+            "status_code": None,
+            "error": safe_err,
+        }
+

@@ -8,6 +8,7 @@ from .api.routes.publish import router as publish_router
 from .api.routes.rag import router as rag_router
 from .api.routes.ai import router as ai_router
 from .api.routes.agent import router as agent_router
+from .api.routes.email import router as email_router
 from .auth import router as auth_router
 import app.models  # noqa: F401 – ensures all ORM models are registered with Base.metadata
 
@@ -56,6 +57,7 @@ app.include_router(publish_router, prefix=settings.API_V1_PREFIX)
 app.include_router(rag_router, prefix=settings.API_V1_PREFIX)
 app.include_router(ai_router, prefix=settings.API_V1_PREFIX)
 app.include_router(agent_router, prefix=settings.API_V1_PREFIX)
+app.include_router(email_router, prefix=settings.API_V1_PREFIX)
 app.include_router(auth_router, prefix=settings.API_V1_PREFIX)
 
 
