@@ -32,9 +32,8 @@ export const Login: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedDemoRole, setSelectedDemoRole] = useState<UserRole>('Registrar');
 
-  // Redirection destination
-  const fromPath = (location.state as any)?.from?.pathname;
-  const destination = fromPath && fromPath !== '/login' && fromPath !== '/' ? fromPath : '/dashboard';
+  // Redirection destination: redirect to authenticated Landing/Home page (/)
+  const destination = '/';
 
   useEffect(() => {
     if (!authLoading && isAuthenticated) {

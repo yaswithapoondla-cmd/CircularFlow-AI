@@ -27,12 +27,21 @@ export function App() {
           <BrowserRouter>
             <LoginModal />
             <Routes>
-              {/* ── Public Entry Point: Login ────────────────────────────── */}
-              {/* "/" and "/login" both show the Login page.                  */}
-              {/* Login.tsx already redirects authenticated users to          */}
-              {/* "/dashboard" via its useEffect, so no extra logic needed.   */}
-              <Route path="/" element={<Login />} />
+              {/* ── Public Authentication Route ────────────────────────────── */}
               <Route path="/login" element={<Login />} />
+
+              {/* ── Authenticated Landing / Showcase Page ─────────────────── */}
+              {/* "/" requires authentication. Unauthenticated users are        */}
+              {/* redirected to "/login" by ProtectedRoute.                     */}
+              {/* Authenticated users land on the original AgenticHome page.    */}
+              <Route
+                path="/"
+                element={
+                  <ProtectedRoute>
+                    <AgenticHome />
+                  </ProtectedRoute>
+                }
+              />
 
               {/* ── Protected Governance OS Routes ─────────────────────────── */}
               <Route
