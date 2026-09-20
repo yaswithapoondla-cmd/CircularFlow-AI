@@ -27,6 +27,7 @@ SECURITY:
     circular publication continues uninterrupted.
 """
 import os
+import re
 import uuid
 import logging
 import smtplib
@@ -434,6 +435,209 @@ def send_single_notification(
         )
 
 
+EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _is_valid_email(email: Optional[str]) -> bool:
+    """Validate email format."""
+    if not email:
+        return False
+    return bool(EMAIL_REGEX.match(email.strip()))
+
+
+def resolve_circular_recipients(
+    db: Session,
+    *,
+    circular_id: str,
+    circular_ref: str,
+    department: str,
+    target_audience: List[str],
+    published_by_email: Optional[str] = None,
+) -> dict:
+    """
+    Resolve and deduplicate intended email recipients for a circular.
+
+    Resolution Strategy:
+    1. Existing Acknowledgements: Recipients pre-linked to this circular.
+    2. Target Audience matching:
+       - Universal broadcast keywords ("all campus occupants", "all staff", "all students", etc.)
+       - Role-specific keywords (Faculty, HOD, Student, Staff)
+       - Department-specific audience mentions
+    3. Department matching: Recipients and Users matching circular's department.
+    4. Governance leads: Registrar / Admin users.
+    5. User joining: Resolves recipient emails to User.id where matching user records exist.
+    6. Governance failsafe: If resolution is empty, falls back to Department HODs + Registrar.
+    7. Publisher exclusion: Removes publisher email if other recipients exist to avoid self-notification.
+
+    Returns:
+        dict: email -> {"name": str, "user_id": Optional[str], "source": str}
+    """
+    from ..models.recipients import Recipient
+    from ..models.users import User
+    from ..models.acknowledgements import Acknowledgement
+
+    audience_list = [a.strip().lower() for a in (target_audience or []) if a and a.strip()]
+    audience_text = " ".join(audience_list)
+
+    # Universal broadcast detection
+    universal_keywords = (
+        "all", "all campus", "all campus occupants", "all staff", "all students",
+        "all faculty", "all users", "entire university", "campus-wide",
+        "everyone", "general", "all members", "all occupants", "all teaching faculty",
+    )
+    is_universal = any(
+        kw == a or kw in audience_text
+        for kw in universal_keywords
+        for a in (audience_list or [""])
+    ) if audience_list else False
+
+    # Role-based audience flags
+    target_faculty = is_universal or any(
+        kw in audience_text for kw in ("faculty", "teaching", "professor", "prof", "academic", "dean")
+    )
+    target_students = is_universal or any(
+        kw in audience_text for kw in ("student", "students", "scholar", "scholars")
+    )
+    target_hods = is_universal or any(
+        kw in audience_text for kw in ("hod", "head", "heads", "chair", "department heads", "department hods")
+    )
+    target_staff = is_universal or any(
+        kw in audience_text for kw in ("staff", "technician", "technicians", "support", "warden", "wardens", "squad", "security")
+    )
+
+    resolved: dict[str, dict] = {}
+
+    # ── 1. Circular Acknowledgements (pre-seeded / explicit recipient links) ──
+    acks = db.query(Acknowledgement).filter(Acknowledgement.circular_id == circular_id).all()
+    for ack in acks:
+        if ack.recipient_rel and _is_valid_email(ack.recipient_rel.email):
+            em = ack.recipient_rel.email.strip().lower()
+            resolved[em] = {
+                "name": ack.recipient_rel.name or "",
+                "user_id": None,
+                "source": "acknowledgement",
+            }
+
+    # ── 2. Recipients Table Matching ─────────────────────────────────────────
+    dept_lower = (department or "").strip().lower()
+    all_recipients = db.query(Recipient).all()
+
+    for r in all_recipients:
+        if not _is_valid_email(r.email):
+            continue
+
+        em = r.email.strip().lower()
+        r_role = (r.role or "").strip().lower()
+        r_dept = (r.department or "").strip().lower()
+
+        matched = False
+        if is_universal:
+            matched = True
+        elif dept_lower and (dept_lower in r_dept or r_dept in dept_lower):
+            matched = True
+        elif target_hods and r_role == "hod":
+            matched = True
+        elif target_faculty and r_role in ("faculty", "hod"):
+            matched = True
+        elif target_students and r_role == "student":
+            matched = True
+        elif target_staff and r_role in ("staff", "technician"):
+            matched = True
+
+        if matched and em not in resolved:
+            resolved[em] = {
+                "name": r.name or "",
+                "user_id": None,
+                "source": "recipients_table",
+            }
+
+    # ── 3. Users Table Matching & Joining ────────────────────────────────────
+    all_users = db.query(User).all()
+    user_email_to_id: dict[str, str] = {}
+
+    for u in all_users:
+        if not _is_valid_email(u.email):
+            continue
+        u_em = u.email.strip().lower()
+        user_email_to_id[u_em] = u.id
+
+        u_role = (u.role or "").strip().lower()
+        u_dept = (u.department_name or "").strip().lower()
+
+        matched_user = False
+        if is_universal:
+            matched_user = True
+        elif u_role in ("registrar", "admin"):
+            matched_user = True
+        elif dept_lower and (dept_lower in u_dept or u_dept in dept_lower):
+            matched_user = True
+        elif target_faculty and u_role == "faculty":
+            matched_user = True
+        elif target_students and u_role == "student":
+            matched_user = True
+
+        if matched_user:
+            if u_em not in resolved:
+                resolved[u_em] = {
+                    "name": u.name or "",
+                    "user_id": u.id,
+                    "source": "users_table",
+                }
+            else:
+                resolved[u_em]["user_id"] = u.id
+
+    # Attach User.id to any recipient matched from the recipients table
+    for em, data in resolved.items():
+        if not data.get("user_id") and em in user_email_to_id:
+            data["user_id"] = user_email_to_id[em]
+
+    # ── 4. Governance Failsafe: Fallback to HODs + Registrar if no target recipients ──
+    has_target_recipients = any(
+        d.get("source") in ("acknowledgement", "recipients_table") for d in resolved.values()
+    )
+    if not has_target_recipients:
+        logger.info(
+            "[EmailService] No target recipients matched by audience/department for %s. "
+            "Applying governance fallback (Department HODs + Registrar).",
+            circular_ref,
+        )
+        for r in all_recipients:
+            if _is_valid_email(r.email) and (r.role or "").strip().lower() == "hod":
+                em = r.email.strip().lower()
+                resolved[em] = {
+                    "name": r.name or "",
+                    "user_id": user_email_to_id.get(em),
+                    "source": "fallback_hod",
+                }
+
+        for u in all_users:
+            if _is_valid_email(u.email) and (u.role or "").strip().lower() in ("registrar", "admin"):
+                em = u.email.strip().lower()
+                resolved[em] = {
+                    "name": u.name or "",
+                    "user_id": u.id,
+                    "source": "fallback_admin",
+                }
+
+    # ── 5. Exclude Publisher (avoid self-notification if others exist) ────────
+    if published_by_email and _is_valid_email(published_by_email):
+        pub_em = published_by_email.strip().lower()
+        if pub_em in resolved:
+            if len(resolved) > 1:
+                resolved.pop(pub_em, None)
+                logger.info(
+                    "[EmailService] Excluded publisher %s from notification list (%d recipients remain).",
+                    pub_em, len(resolved),
+                )
+            else:
+                logger.info(
+                    "[EmailService] Publisher %s is the sole resolved recipient for %s — retained.",
+                    pub_em, circular_ref,
+                )
+
+    return resolved
+
+
 def dispatch_circular_notifications(
     *,
     db: Session,
@@ -454,69 +658,59 @@ def dispatch_circular_notifications(
     """
     Determine recipients and send notification emails for a published circular.
 
-    Recipient selection logic:
-    1. Query `recipients` table whose department matches the circular's department.
-    2. Also include all `users` whose role is Registrar (institutional admin) OR whose
-       department_name matches — so governance leads are always notified.
-    3. Exclude the publisher (published_by_email) to avoid duplicating their own notification
-       unless they are in the audience by another rule.
-    4. Deduplicate by email address.
-
     This runs in a background task — errors are recorded, not raised to the HTTP layer.
     Returns a summary dict: {"sent": N, "failed": M, "skipped": K}
     """
-    from ..models.recipients import Recipient
-    from ..models.users import User
-    from sqlalchemy import or_, func
-
     config = _get_config()
     if not config["enabled"]:
-        logger.info("[EmailService] Email notifications disabled. dispatch skipped.")
+        logger.info("[EmailService] Email notifications disabled (EMAIL_ENABLED=false). dispatch skipped.")
         _write_audit(db, circular_id, circular_ref, sent=0, failed=0, skipped=0,
                      reason="EMAIL_ENABLED=false")
         return {"sent": 0, "failed": 0, "skipped": 0}
 
     if not _is_configured(config):
-        logger.info("[EmailService] Email not configured. dispatch skipped.")
+        logger.info("[EmailService] Email not configured (no API key or SMTP). dispatch skipped.")
         _write_audit(db, circular_id, circular_ref, sent=0, failed=0, skipped=0,
                      reason="no provider configured")
         return {"sent": 0, "failed": 0, "skipped": 0}
 
-    # ── Build recipient list ──────────────────────────────────────────────────
-    email_map: dict[str, str] = {}  # email → name
-
-    # 1. Dept-matched recipients from `recipients` table
-    dept_recipients = db.query(Recipient).filter(
-        func.lower(Recipient.department) == department.lower()
-    ).all()
-    for r in dept_recipients:
-        if r.email:
-            email_map[r.email.lower()] = r.name or ""
-
-    # 2. If audience contains "all" or "all staff" → add every user
-    audience_lower = [a.lower() for a in target_audience]
-    include_all = any(kw in " ".join(audience_lower) for kw in ("all staff", "all users", "entire university"))
-
-    # 3. Registrar / Admin users always receive institutional circulars
-    user_query = db.query(User).filter(
-        or_(
-            func.lower(User.role) == "registrar",
-            func.lower(User.department_name) == department.lower(),
-            *([sa_true()] if include_all else []),
-        )
+    # ── Resolve Recipients ───────────────────────────────────────────────────
+    recipient_map = resolve_circular_recipients(
+        db,
+        circular_id=circular_id,
+        circular_ref=circular_ref,
+        department=department,
+        target_audience=target_audience,
+        published_by_email=published_by_email,
     )
-    for u in user_query.all():
-        if u.email:
-            email_map[u.email.lower()] = u.name or ""
 
-    # 4. Remove publisher to avoid self-notification
-    if published_by_email:
-        email_map.pop(published_by_email.lower(), None)
+    valid_emails_count = len(recipient_map)
+    users_with_id_count = sum(1 for d in recipient_map.values() if d.get("user_id"))
+
+    logger.info(
+        "[EmailService] Circular %s recipient resolution: "
+        "department='%s', audience=%s -> "
+        "%d valid email addresses, %d users linked, final recipient count: %d",
+        circular_ref, department, target_audience,
+        valid_emails_count, users_with_id_count, valid_emails_count,
+    )
+
+    if not recipient_map:
+        reason = (
+            f"No recipients resolved for department='{department}', "
+            f"target_audience={target_audience}. Database contains no matching recipients or users."
+        )
+        logger.warning("[EmailService] %s - circular %s", reason, circular_ref)
+        _write_audit(db, circular_id, circular_ref, sent=0, failed=0, skipped=0, reason=reason)
+        return {"sent": 0, "failed": 0, "skipped": 0, "reason": reason}
 
     sent = failed = skipped = 0
     subject = f"[New Circular] {title} ({circular_ref})"
 
-    for email, name in email_map.items():
+    for email, data in recipient_map.items():
+        name = data.get("name", "")
+        user_id = data.get("user_id")
+
         log_id = str(uuid.uuid4())
         log_entry = EmailDeliveryLog(
             id=log_id,
@@ -524,6 +718,7 @@ def dispatch_circular_notifications(
             circular_ref=circular_ref,
             recipient_email=email,
             recipient_name=name,
+            recipient_user_id=user_id,
             status="PENDING",
             created_at=datetime.now(timezone.utc),
         )
@@ -583,9 +778,11 @@ def _write_audit(
     skipped: int,
     reason: str = "",
 ) -> None:
-    """Record EMAIL_NOTIFICATION_SENT / EMAIL_NOTIFICATION_FAILED in audit_logs."""
+    """Record EMAIL_NOTIFICATION_SENT / EMAIL_NOTIFICATION_FAILED / EMAIL_NOTIFICATION_SKIPPED in audit_logs."""
     try:
-        event_type = "EMAIL_NOTIFICATION_SENT" if failed == 0 else "EMAIL_NOTIFICATION_FAILED"
+        event_type = "EMAIL_NOTIFICATION_SENT" if failed == 0 and sent > 0 else (
+            "EMAIL_NOTIFICATION_FAILED" if failed > 0 else "EMAIL_NOTIFICATION_SKIPPED"
+        )
         description = (
             f"Email notifications for {circular_ref}: "
             f"{sent} sent, {failed} failed, {skipped} skipped."
@@ -603,6 +800,7 @@ def _write_audit(
                 "sent": sent,
                 "failed": failed,
                 "skipped": skipped,
+                "reason": reason,
             },
         )
         db.add(log)
@@ -610,11 +808,3 @@ def _write_audit(
     except Exception as exc:  # noqa: BLE001
         logger.error("[EmailService] Failed to write audit log: %s", exc)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Convenience import alias used in dispatch_circular_notifications
-# ─────────────────────────────────────────────────────────────────────────────
-def sa_true():
-    """Return an always-true SQLAlchemy clause (for include_all branch)."""
-    from sqlalchemy import true
-    return true()
