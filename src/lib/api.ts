@@ -251,3 +251,179 @@ export async function searchRAG(query: string, topK: number = 5): Promise<any> {
   return res.json();
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 20A: Circular Publication & Email Notification
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface PublishCircularResponse {
+  circular_id: string;
+  ref_no: string;
+  status: string;
+  published_at: string;
+  email_notifications_queued: boolean;
+  message: string;
+}
+
+export interface NotificationStatusResponse {
+  circular_id: string;
+  ref_no: string;
+  total: number;
+  sent: number;
+  failed: number;
+  pending: number;
+  logs: Array<{
+    id: string;
+    recipient_email: string;
+    recipient_name: string | null;
+    status: string;
+    sent_at: string | null;
+    error_message: string | null;
+    created_at: string | null;
+  }>;
+}
+
+/**
+ * Publish a circular via the backend.
+ * Calls POST /api/v1/circulars/{circularId}/publish.
+ * Triggers background email dispatch on the backend.
+ *
+ * @param circularId  Backend circular ID or ref_no
+ * @param token       JWT access token from AuthContext
+ * @param options     Optional publisher override fields
+ */
+export async function publishCircular(
+  circularId: string,
+  token: string | null,
+  options?: {
+    published_by?: string;
+    published_by_email?: string;
+    send_email_notifications?: boolean;
+  },
+): Promise<ApiResponse<PublishCircularResponse>> {
+  if (!token) {
+    return {
+      success: false,
+      error: 'Authentication required. Please log in and try again.',
+      isBackendOnline: false,
+    };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+    const res = await fetch(
+      `${API_BASE_URL}/api/v1/circulars/${encodeURIComponent(circularId)}/publish`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify(options ?? {}),
+        signal: controller.signal,
+      },
+    );
+    clearTimeout(timeoutId);
+
+    if (res.status === 404) {
+      return {
+        success: false,
+        error: `Circular '${circularId}' not found in the backend database. Ensure it has been synced.`,
+        isBackendOnline: true,
+      };
+    }
+
+    if (res.status === 409) {
+      const body = await res.json().catch(() => ({ detail: 'Already published.' }));
+      return {
+        success: false,
+        error: body.detail || 'This circular is already published.',
+        isBackendOnline: true,
+      };
+    }
+
+    if (res.status === 401 || res.status === 403) {
+      return {
+        success: false,
+        error: 'Authorisation failed. Your session may have expired — please log in again.',
+        isBackendOnline: true,
+      };
+    }
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      return {
+        success: false,
+        error: body.detail || `Backend returned HTTP ${res.status}.`,
+        isBackendOnline: true,
+      };
+    }
+
+    const data: PublishCircularResponse = await res.json();
+    return { success: true, data, isBackendOnline: true };
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      return {
+        success: false,
+        error: 'Publish request timed out. Please try again.',
+        isBackendOnline: false,
+      };
+    }
+    return {
+      success: false,
+      error: err.message || 'Could not reach the backend server.',
+      isBackendOnline: false,
+    };
+  }
+}
+
+/**
+ * Fetch email delivery status for a published circular.
+ * Calls GET /api/v1/circulars/{circularId}/notification-status.
+ */
+export async function getCircularNotificationStatus(
+  circularId: string,
+  token: string | null,
+): Promise<ApiResponse<NotificationStatusResponse>> {
+  if (!token) {
+    return { success: false, error: 'Authentication required.', isBackendOnline: false };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+    const res = await fetch(
+      `${API_BASE_URL}/api/v1/circulars/${encodeURIComponent(circularId)}/notification-status`,
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+        },
+        signal: controller.signal,
+      },
+    );
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return {
+        success: false,
+        error: body.detail || `HTTP ${res.status}`,
+        isBackendOnline: res.status !== 0,
+      };
+    }
+
+    const data: NotificationStatusResponse = await res.json();
+    return { success: true, data, isBackendOnline: true };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err.message || 'Could not reach the backend.',
+      isBackendOnline: false,
+    };
+  }
+}
