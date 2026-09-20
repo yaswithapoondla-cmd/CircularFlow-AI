@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from .config import get_settings
 from .api.routes.health import router as health_router
 from .api.routes.circulars import router as circulars_router
+from .api.routes.publish import router as publish_router
 from .api.routes.rag import router as rag_router
 from .api.routes.ai import router as ai_router
 from .api.routes.agent import router as agent_router
@@ -51,6 +52,7 @@ app.include_router(health_router, prefix="/api")
 # Versioned API at /api/v1
 app.include_router(health_router, prefix=settings.API_V1_PREFIX)
 app.include_router(circulars_router, prefix=settings.API_V1_PREFIX)
+app.include_router(publish_router, prefix=settings.API_V1_PREFIX)
 app.include_router(rag_router, prefix=settings.API_V1_PREFIX)
 app.include_router(ai_router, prefix=settings.API_V1_PREFIX)
 app.include_router(agent_router, prefix=settings.API_V1_PREFIX)
@@ -73,6 +75,8 @@ async def root():
             "auth": f"{settings.API_V1_PREFIX}/auth",
             "health": f"{settings.API_V1_PREFIX}/health",
             "circulars": f"{settings.API_V1_PREFIX}/circulars",
+            "publish": f"{settings.API_V1_PREFIX}/circulars/{{id}}/publish",
+            "notification_status": f"{settings.API_V1_PREFIX}/circulars/{{id}}/notification-status",
             "rag": f"{settings.API_V1_PREFIX}/rag",
             "ai": f"{settings.API_V1_PREFIX}/ai",
             "agent": f"{settings.API_V1_PREFIX}/agent",

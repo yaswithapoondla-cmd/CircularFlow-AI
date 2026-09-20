@@ -7,6 +7,7 @@ from .recipients import Recipient
 from .acknowledgements import Acknowledgement
 from .actions import ActionItem
 from .audit_logs import AuditLog
+from .email_delivery_logs import EmailDeliveryLog
 
 __all__ = [
     "Base",
@@ -17,5 +18,6 @@ __all__ = [
     "Recipient",
     "Acknowledgement",
     "ActionItem",
-    "AuditLog"
+    "AuditLog",
+    "EmailDeliveryLog",
 ]
