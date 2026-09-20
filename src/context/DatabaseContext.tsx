@@ -12,7 +12,7 @@ interface DatabaseContextType {
   recipients: RecipientRecord[];
   
   // Circular operations
-  addCircular: (newCirc: Omit<Circular, 'id' | 'createdAt' | 'updatedAt'>) => Circular;
+  addCircular: (newCirc: Omit<Circular, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }) => Circular;
   updateCircular: (id: string, updates: Partial<Circular>) => void;
   deleteCircular: (id: string) => void;
   
@@ -123,9 +123,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // ── Database Operations ────────────────────────────────────────────────────
   
-  const addCircular = (newCircData: Omit<Circular, 'id' | 'createdAt' | 'updatedAt'>): Circular => {
+  const addCircular = (newCircData: Omit<Circular, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }): Circular => {
     const timestamp = new Date().toISOString();
-    const newId = `circ-${Date.now().toString().slice(-4)}`;
+    const newId = newCircData.id || `circ-${Date.now().toString().slice(-4)}`;
     
     const newCircular: Circular = {
       ...newCircData,

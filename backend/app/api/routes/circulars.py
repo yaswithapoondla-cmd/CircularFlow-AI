@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, status, Depends
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
-from ...schemas.circular import Circular, CircularListResponse
+from ...schemas.circular import Circular, CircularListResponse, CircularCreate
 from ...schemas.circular_gen import CircularGenerateRequest, GeneratedCircularContent, CircularPDFRequest
 from ...services.circular_service import CircularService
 from ...services.circular_gen_service import generate_circular as svc_generate_circular
@@ -13,6 +13,33 @@ from ...auth.deps import get_current_user
 from ...models.users import User
 
 router = APIRouter(prefix="/circulars", tags=["Circulars & Governance Directives"])
+
+
+@router.post(
+    "",
+    response_model=Circular,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create / Save Circular Draft",
+    description="Persists a new circular draft in the PostgreSQL database. Authenticated with JWT. Does not publish it.",
+)
+async def create_circular(
+    data: CircularCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Circular:
+    """Authenticated: creates and persists a new circular in Draft status."""
+    try:
+        return CircularService.create_circular(
+            db=db,
+            data=data,
+            current_user=current_user,
+        )
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create circular: {str(exc)}",
+        )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 18: AI Circular Generation Endpoints

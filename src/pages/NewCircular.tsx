@@ -5,13 +5,16 @@ import {
   AlertCircle, Lock, UserCheck, ShieldAlert, Eye,
   Download, RefreshCw, CheckCircle2, ChevronRight,
   Building, Users, CalendarDays, Tag, Info, X,
-  FileCheck, Zap,
+  FileCheck, Zap, Save,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
+import { useDatabase } from '../context/DatabaseContext';
+import type { CircularCategory, PriorityLevel } from '../types';
 import {
   generateCircularWithAI,
   downloadCircularPDF,
+  saveCircular,
   type GeneratedCircularContent,
 } from '../lib/circularGen';
 
@@ -331,6 +334,7 @@ export const NewCircular: React.FC = () => {
   // ── State ───────────────────────────────────────────────────────────────────
   const [mode, setMode] = useState<CreationMode>(null);
   const [view, setView] = useState<'form' | 'edit' | 'preview'>('form');
+  const { addCircular } = useDatabase();
 
   // AI mode form
   const [aiTopic, setAiTopic] = useState('');
@@ -350,6 +354,106 @@ export const NewCircular: React.FC = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [pdfSuccess, setPdfSuccess] = useState(false);
+
+  // Save / Persistence state
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+
+  // ── Save Circular Draft ─────────────────────────────────────────────────────
+  const handleSave = async () => {
+    if (!circularContent) return;
+    if (!circularContent.title.trim()) {
+      setSaveError('Please enter a title for the circular.');
+      return;
+    }
+    if (!circularContent.body.trim()) {
+      setSaveError('Circular body matter cannot be empty.');
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveError(null);
+    setSaveSuccess(null);
+
+    const res = await saveCircular(circularContent, token);
+    setIsSaving(false);
+
+    if (res.success && res.data) {
+      const saved = res.data;
+      setSaveSuccess(`Circular ${saved.ref_no} saved successfully as Draft! Redirecting to Approvals...`);
+
+      const validCategories: CircularCategory[] = [
+        'Policy & Compliance',
+        'Safety & Security',
+        'Financial & Delegation',
+        'Operations & Logistics',
+        'IT & Data Governance',
+        'HR & Workforce',
+      ];
+      const category: CircularCategory = validCategories.includes(saved.category as any)
+        ? (saved.category as CircularCategory)
+        : 'Policy & Compliance';
+
+      const validPriorities: PriorityLevel[] = ['Critical', 'High', 'Medium', 'Low'];
+      const priority: PriorityLevel = validPriorities.includes(saved.priority as any)
+        ? (saved.priority as PriorityLevel)
+        : 'High';
+
+      // Add to local DatabaseContext so it appears immediately in Approvals
+      addCircular({
+        id: saved.id,
+        refNo: saved.ref_no,
+        title: saved.title,
+        summary: saved.summary || circularContent.subject || circularContent.title,
+        aiExecutiveSummary: saved.summary || circularContent.subject || circularContent.title,
+        category,
+        status: 'Draft',
+        priority,
+        issuingAuthority: saved.department || circularContent.department || 'Executive Office',
+        signatoryName: saved.signatory || circularContent.signatory_name || currentUser.name,
+        signatoryTitle: circularContent.signatory_designation || 'Authorized Signatory',
+        effectiveDate: saved.effective_date,
+        version: '1.0',
+        tags: Array.isArray(saved.tags) && saved.tags.length > 0 ? saved.tags : ['New Directive', saved.department || 'General'],
+        affectedAudience: {
+          departments: ['All Departments'],
+          totalCount: 1200,
+          ackCount: 0,
+          ackPercentage: 0,
+        },
+        actionItems: [],
+        approvalChain: [
+          {
+            stage: 1,
+            title: 'Originator / HOD Submission',
+            approverRole: 'Originator',
+            approverName: currentUser.name,
+            status: 'Approved',
+            timestamp: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+            comments: 'Draft authored and submitted for executive authorization.',
+          },
+          {
+            stage: 2,
+            title: 'Dean / Registrar Authorization',
+            approverRole: 'Registrar',
+            approverName: 'Pending Registrar Signature',
+            status: 'Pending',
+          },
+        ],
+        departmentBreakdown: [],
+        conflictCheckStatus: 'No Conflicts',
+        contentMarkdown: saved.body || circularContent.body || '',
+        documentUrl: saved.file_attachment || undefined,
+      });
+
+      setTimeout(() => {
+        navigate('/approvals');
+      }, 1500);
+    } else {
+      setSaveError(res.error || 'Failed to save circular to database.');
+    }
+  };
 
   // ── AI Generation ───────────────────────────────────────────────────────────
   const handleGenerate = async () => {
@@ -720,10 +824,24 @@ export const NewCircular: React.FC = () => {
           </div>
         )}
 
+        {/* Save errors/success */}
+        {saveError && (
+          <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-red-950/40 border border-red-500/40">
+            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+            <p className="text-xs text-red-300">{saveError}</p>
+          </div>
+        )}
+        {saveSuccess && (
+          <div className="flex items-center gap-2.5 p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-500/40 animate-pulse">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            <p className="text-xs text-emerald-300 font-semibold">{saveSuccess}</p>
+          </div>
+        )}
+
         {/* Action Bar */}
         <div className={`${card} p-4 flex flex-wrap items-center justify-between gap-3`}>
           <div className={`text-xs ${sub}`}>
-            {mode === 'ai' ? 'Edit the content above, then preview or download.' : 'Complete all fields, then preview or download.'}
+            {mode === 'ai' ? 'Edit the content above, then save as draft or download PDF.' : 'Complete all fields, then save as draft or download PDF.'}
           </div>
           <div className="flex items-center gap-3">
             <button
@@ -736,12 +854,24 @@ export const NewCircular: React.FC = () => {
               id="btn-generate-pdf"
               onClick={handleDownloadPDF}
               disabled={isDownloading || !circularContent.title.trim() || !circularContent.body.trim()}
-              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition-all hover:scale-105"
+              className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-semibold flex items-center gap-2 transition-colors"
             >
               {isDownloading ? (
-                <><Loader2 className="w-4 h-4 animate-spin" /> Generating PDF...</>
+                <><Loader2 className="w-4 h-4 animate-spin" /> PDF...</>
               ) : (
-                <><Download className="w-4 h-4" /> Generate PDF</>
+                <><Download className="w-4 h-4" /> Download PDF</>
+              )}
+            </button>
+            <button
+              id="btn-save-circular"
+              onClick={handleSave}
+              disabled={isSaving || !circularContent.title.trim() || !circularContent.body.trim()}
+              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-indigo-600/30 transition-all hover:scale-105"
+            >
+              {isSaving ? (
+                <><Loader2 className="w-4 h-4 animate-spin" /> Saving Draft...</>
+              ) : (
+                <><Save className="w-4 h-4" /> Save as Draft &amp; Submit</>
               )}
             </button>
           </div>
@@ -772,16 +902,41 @@ export const NewCircular: React.FC = () => {
               id="btn-download-pdf"
               onClick={handleDownloadPDF}
               disabled={isDownloading}
-              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition-all hover:scale-105"
+              className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-semibold flex items-center gap-2 transition-colors"
             >
               {isDownloading ? (
-                <><Loader2 className="w-4 h-4 animate-spin" /> Generating PDF...</>
+                <><Loader2 className="w-4 h-4 animate-spin" /> PDF...</>
               ) : (
                 <><Download className="w-4 h-4" /> Download PDF</>
               )}
             </button>
+            <button
+              id="btn-save-preview"
+              onClick={handleSave}
+              disabled={isSaving || !circularContent.title.trim() || !circularContent.body.trim()}
+              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-indigo-600/30 transition-all hover:scale-105"
+            >
+              {isSaving ? (
+                <><Loader2 className="w-4 h-4 animate-spin" /> Saving Draft...</>
+              ) : (
+                <><Save className="w-4 h-4" /> Save as Draft &amp; Submit</>
+              )}
+            </button>
           </div>
         </div>
+
+        {saveError && (
+          <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-red-950/40 border border-red-500/40">
+            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+            <p className="text-xs text-red-300">{saveError}</p>
+          </div>
+        )}
+        {saveSuccess && (
+          <div className="flex items-center gap-2.5 p-3.5 rounded-xl bg-emerald-950/40 border border-emerald-500/40 animate-pulse">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            <p className="text-xs text-emerald-300 font-semibold">{saveSuccess}</p>
+          </div>
+        )}
 
         {pdfError && (
           <div className="flex items-start gap-2.5 p-3 rounded-xl bg-red-950/40 border border-red-500/40">

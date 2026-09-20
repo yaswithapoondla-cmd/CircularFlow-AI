@@ -122,3 +122,77 @@ export async function downloadCircularPDF(
     };
   }
 }
+
+// ── Save / Persist Circular Draft ─────────────────────────────────────────────
+
+export interface SaveCircularPayload {
+  title: string;
+  subject?: string;
+  department: string;
+  category?: string;
+  priority?: string;
+  effective_date?: string;
+  reference?: string;
+  body: string;
+  instructions?: string;
+  contact_information?: string;
+  signatory_name?: string;
+  signatory_designation?: string;
+  audience?: string;
+  target_audience?: string[];
+  tags?: string[];
+  required_actions?: string[];
+  status?: string;
+}
+
+export interface SavedCircularResponse {
+  id: string;
+  ref_no: string;
+  title: string;
+  department: string;
+  category: string;
+  status: string;
+  priority: string;
+  published_date: string;
+  effective_date: string;
+  version: string;
+  author: string;
+  signatory: string;
+  summary: string;
+  body: string;
+  target_audience: string[];
+  tags: string[];
+  required_actions: string[];
+  file_attachment?: string;
+}
+
+export async function saveCircular(
+  payload: SaveCircularPayload | GeneratedCircularContent,
+  token: string | null,
+): Promise<GenApiResponse<SavedCircularResponse>> {
+  if (!token) {
+    return { success: false, error: 'Authentication required. Please log in.' };
+  }
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/v1/circulars`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      return { success: false, error: err.detail || `Server error: ${res.status}` };
+    }
+    const data: SavedCircularResponse = await res.json();
+    return { success: true, data };
+  } catch (e: any) {
+    return {
+      success: false,
+      error: e?.message || 'Cannot reach the backend. Please ensure the server is running.',
+    };
+  }
+}
+

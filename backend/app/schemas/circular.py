@@ -42,6 +42,26 @@ class Circular(BaseModel):
     file_attachment: Optional[str] = Field(None, description="Name or path of PDF attachment")
 
 
+class CircularCreate(BaseModel):
+    """Payload for creating / saving a new circular draft."""
+    title: str = Field(..., min_length=3, description="Circular title")
+    subject: Optional[str] = Field(None, description="Subject line")
+    department: str = Field(..., description="Issuing department")
+    category: Optional[str] = Field("Policy & Compliance", description="Classification category")
+    priority: Optional[str] = Field("High", description="Priority level: Critical, High, Medium, Low")
+    effective_date: Optional[str] = Field(None, description="Date directive takes legal force")
+    reference: Optional[str] = Field(None, description="Reference number")
+    body: str = Field(..., min_length=5, description="Full text and policy guidelines")
+    instructions: Optional[str] = Field(None, description="Compliance instructions")
+    contact_information: Optional[str] = Field(None, description="Contact information")
+    signatory_name: Optional[str] = Field(None, description="Signing executive authority name")
+    signatory_designation: Optional[str] = Field(None, description="Signing executive authority designation")
+    audience: Optional[str] = Field(None, description="Target audience description")
+    target_audience: Optional[List[str]] = Field(None, description="List of target audience groups")
+    tags: Optional[List[str]] = Field(None, description="Descriptive metadata tags")
+    required_actions: Optional[List[str]] = Field(None, description="Required actions")
+    status: Optional[str] = Field("Draft", description="Status: Draft or Under Review")
+
 
 class CircularListResponse(BaseModel):
     items: List[Circular]
