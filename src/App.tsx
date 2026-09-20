@@ -27,13 +27,14 @@ export function App() {
           <BrowserRouter>
             <LoginModal />
             <Routes>
-              {/* ── Original Branded Home / Showcase Page ──────────────── */}
-              <Route path="/" element={<AgenticHome />} />
-
-              {/* ── Public Authentication Page ─────────────────────────── */}
+              {/* ── Public Entry Point: Login ────────────────────────────── */}
+              {/* "/" and "/login" both show the Login page.                  */}
+              {/* Login.tsx already redirects authenticated users to          */}
+              {/* "/dashboard" via its useEffect, so no extra logic needed.   */}
+              <Route path="/" element={<Login />} />
               <Route path="/login" element={<Login />} />
 
-              {/* ── Protected Governance OS Routes ─────────────────────── */}
+              {/* ── Protected Governance OS Routes ─────────────────────────── */}
               <Route
                 element={
                   <ProtectedRoute>
@@ -76,12 +77,12 @@ export function App() {
                 {/* Knowledge Base */}
                 <Route path="knowledge-base" element={<CircularsList />} />
 
-                {/* Agentic Showcase view */}
+                {/* Agentic Showcase — protected, accessible post-login only */}
                 <Route path="showcase" element={<AgenticHome />} />
               </Route>
 
-              {/* Fallback to Home */}
-              <Route path="*" element={<Navigate to="/" replace />} />
+              {/* Fallback: redirect any unknown URL to login */}
+              <Route path="*" element={<Navigate to="/login" replace />} />
             </Routes>
           </BrowserRouter>
         </DatabaseProvider>

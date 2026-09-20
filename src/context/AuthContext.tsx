@@ -1,106 +1,23 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// AuthContext.tsx
+// ONLY exports React components (AuthProvider) and hooks (useAuth).
+// Plain types/constants live in ./authConstants.ts so Vite Fast Refresh works.
+// ─────────────────────────────────────────────────────────────────────────────
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { API_BASE_URL } from '../lib/api';
+import {
+  type UserRole,
+  type UserProfile,
+  type AuthContextType,
+  PRESET_USERS,
+  AUTH_CREDENTIALS,
+  isValidJWT,
+  normalizeRole,
+} from './authConstants';
 
-export type UserRole = 'Registrar' | 'Faculty' | 'Student';
-
-export interface UserProfile {
-  id: string;
-  name: string;
-  email: string;
-  role: UserRole;
-  department: string;
-  designation: string;
-  avatarUrl?: string;
-  canUploadDocuments: boolean;
-  canEditDocuments: boolean;
-  canApproveDirectives: boolean;
-  canBroadcastNudge: boolean;
-}
-
-export interface UserCredential {
-  email: string;
-  username: string;
-  password: string;
-  role: UserRole;
-  profile: UserProfile;
-}
-
-export const PRESET_USERS: Record<UserRole, UserProfile> = {
-  Registrar: {
-    id: 'usr-reg-01',
-    name: 'Dr. K. S. R. Murthy',
-    email: 'registrar@vignan.ac.in',
-    role: 'Registrar',
-    department: 'Directorate of Academic Affairs',
-    designation: 'University Registrar & Executive Admin',
-    canUploadDocuments: true,
-    canEditDocuments: true,
-    canApproveDirectives: true,
-    canBroadcastNudge: true,
-  },
-  Faculty: {
-    id: 'usr-fac-01',
-    name: 'Prof. K. Rajasekhar',
-    email: 'hod.cse@vignan.ac.in',
-    role: 'Faculty',
-    department: 'Department of Computer Science & Engineering',
-    designation: 'Professor & Head of Department',
-    canUploadDocuments: true,
-    canEditDocuments: true,
-    canApproveDirectives: true,
-    canBroadcastNudge: true,
-  },
-  Student: {
-    id: 'usr-stu-01',
-    name: 'Vikramaditya Rao',
-    email: 'vikram.22cse088@vignan.ac.in',
-    role: 'Student',
-    department: 'Computer Science & Engineering',
-    designation: 'Undergraduate Student (B.Tech CSE)',
-    canUploadDocuments: false,
-    canEditDocuments: false,
-    canApproveDirectives: false,
-    canBroadcastNudge: false,
-  },
-};
-
-export const AUTH_CREDENTIALS: Record<UserRole, { email: string; usernames: string[]; password: string; hint: string }> = {
-  Registrar: {
-    email: 'registrar@vignan.ac.in',
-    usernames: ['registrar', 'admin', 'registrar@vignan.ac.in'],
-    password: 'registrar@123',
-    hint: 'registrar@123',
-  },
-  Faculty: {
-    email: 'hod.cse@vignan.ac.in',
-    usernames: ['faculty', 'hod', 'hod.cse@vignan.ac.in'],
-    password: 'faculty@123',
-    hint: 'faculty@123',
-  },
-  Student: {
-    email: 'vikram.22cse088@vignan.ac.in',
-    usernames: ['student', 'vikram', 'vikram.22cse088@vignan.ac.in'],
-    password: 'student@123',
-    hint: 'student@123',
-  },
-};
-
-export interface AuthContextType {
-  token: string | null;
-  currentUser: UserProfile;
-  currentRole: UserRole;
-  isAuthenticated: boolean;
-  isLoading: boolean;
-  loginWithPassword: (identifier: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  login: (identifier: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  loginAs: (role: UserRole | string) => void;
-  loginWithCustom: (user: UserProfile) => void;
-  logout: () => void;
-  isLoginModalOpen: boolean;
-  openLoginModal: () => void;
-  closeLoginModal: () => void;
-  refreshUser: () => Promise<void>;
-}
+// Re-export everything consumers need so existing imports still work
+export type { UserRole, UserProfile, UserCredential, AuthContextType } from './authConstants';
+export { PRESET_USERS, AUTH_CREDENTIALS, isValidJWT, normalizeRole } from './authConstants';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -110,39 +27,6 @@ const AUTH_STATUS_KEY = 'circularflow_auth_status';
 const USER_KEY = 'circularflow_user_profile';
 
 const API_BASE = API_BASE_URL;
-
-function normalizeRole(roleStr: string): UserRole {
-  const lower = String(roleStr).toLowerCase();
-  if (lower.includes('fac') || lower.includes('hod')) return 'Faculty';
-  if (lower.includes('stu')) return 'Student';
-  return 'Registrar';
-}
-
-export function isValidJWT(jwtToken: string | null): boolean {
-  if (!jwtToken) return false;
-  const parts = jwtToken.split('.');
-  if (parts.length !== 3) return false;
-  try {
-    const base64Url = parts[1];
-    let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    while (base64.length % 4 !== 0) {
-      base64 += '=';
-    }
-    const jsonPayload = decodeURIComponent(
-      atob(base64)
-        .split('')
-        .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-        .join('')
-    );
-    const payload = JSON.parse(jsonPayload);
-    if (payload.exp && Date.now() >= payload.exp * 1000) {
-      return false; // Token has expired
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [token, setToken] = useState<string | null>(() => {
@@ -262,13 +146,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem(AUTH_STATUS_KEY, 'false');
       }
     } catch (err) {
-      // Backend unreachable: if token format is valid, keep state; else clear
+      // Backend unreachable: keep session alive for mock/demo tokens and valid JWTs
       console.warn('[AuthContext] Backend check error:', err);
-      if (!isValidJWT(activeToken)) {
+      const isMockToken =
+        activeToken.startsWith('mock-token-') ||
+        activeToken.startsWith('demo-token-') ||
+        activeToken.startsWith('custom-token-');
+      if (!isMockToken && !isValidJWT(activeToken)) {
         setToken(null);
         setIsAuthenticated(false);
         localStorage.removeItem(TOKEN_KEY);
       }
+      // For mock tokens or valid JWTs, keep isAuthenticated = true (already set from state init)
     } finally {
       setIsLoading(false);
     }
