@@ -81,7 +81,7 @@ export const Login: React.FC = () => {
 
       {/* Header with Vignan Branding & Theme Toggle */}
       <header className={`w-full max-w-6xl mx-auto px-6 py-5 flex items-center justify-between`}>
-        <Link to="/" className="flex items-center gap-3 group">
+        <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-sky-400 p-0.5 shadow-lg shadow-indigo-500/20 shrink-0">
             <div className={`w-full h-full rounded-[10px] flex items-center justify-center p-0.5 ${
               isDark ? 'bg-slate-950' : 'bg-white'
@@ -103,17 +103,9 @@ export const Login: React.FC = () => {
               Vignan's University
             </span>
           </div>
-        </Link>
+        </div>
 
         <div className="flex items-center gap-3">
-          <Link
-            to="/"
-            className={`text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors ${
-              isDark ? 'border-slate-800 hover:bg-slate-900 text-slate-300' : 'border-slate-200 hover:bg-slate-100 text-slate-700'
-            }`}
-          >
-            ← Back to Home
-          </Link>
           <button
             onClick={toggleTheme}
             className={`p-2 rounded-xl border transition-all ${
