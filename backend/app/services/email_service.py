@@ -74,6 +74,52 @@ def _is_configured(config: dict) -> bool:
     return bool(config["api_key"] or config["smtp_host"])
 
 
+class ResendAPIError(Exception):
+    """Structured exception for Resend API failures to capture diagnostics safely."""
+    def __init__(
+        self,
+        status_code: Optional[int],
+        error_name: str,
+        error_message: str,
+        response_body: str = "",
+    ):
+        self.status_code = status_code
+        self.error_name = error_name
+        self.error_message = error_message
+        self.response_body = response_body
+        summary = f"Resend HTTP {status_code}"
+        if error_name:
+            summary += f" [{error_name}]"
+        if error_message:
+            summary += f": {error_message}"
+        elif response_body:
+            summary += f": {response_body[:300]}"
+        super().__init__(summary)
+
+
+def _sanitize_error_text(
+    text: str,
+    *,
+    api_key: str = "",
+    smtp_password: str = "",
+) -> str:
+    """Ensure no API keys, Bearer tokens, or passwords appear in logs or error messages."""
+    if not text:
+        return ""
+    sanitized = text
+    # Strip exact API key if non-empty
+    if api_key and len(api_key.strip()) >= 4:
+        sanitized = sanitized.replace(api_key.strip(), "[REDACTED_API_KEY]")
+    # Strip exact SMTP password if non-empty
+    if smtp_password and len(smtp_password.strip()) >= 4:
+        sanitized = sanitized.replace(smtp_password.strip(), "[REDACTED_PASSWORD]")
+    # Redact Authorization: Bearer <token>
+    sanitized = re.sub(r"Bearer\s+[A-Za-z0-9_\-\.]+", "Bearer [REDACTED]", sanitized, flags=re.IGNORECASE)
+    # Redact any Resend API keys matching re_<alphanumeric>
+    sanitized = re.sub(r"\bre_[A-Za-z0-9_]{10,}\b", "[REDACTED_RESEND_KEY]", sanitized)
+    return sanitized
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # HTML email template
 # ─────────────────────────────────────────────────────────────────────────────
@@ -310,10 +356,45 @@ def _send_via_resend(
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        if resp.status not in (200, 201):
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
             body = resp.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Resend API returned HTTP {resp.status}: {body[:200]}")
+            if resp.status not in (200, 201):
+                raise ResendAPIError(
+                    status_code=resp.status,
+                    error_name="unexpected_status",
+                    error_message=f"HTTP {resp.status}",
+                    response_body=_sanitize_error_text(body, api_key=api_key),
+                )
+    except urllib.error.HTTPError as err:
+        status_code = err.code
+        err_body = ""
+        try:
+            err_body = err.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+
+        err_name = ""
+        err_message = ""
+        try:
+            err_json = json.loads(err_body)
+            err_name = str(err_json.get("name") or err_json.get("code") or "")
+            err_message = str(err_json.get("message") or "")
+        except Exception:
+            pass
+
+        sanitized_body = _sanitize_error_text(err_body, api_key=api_key)
+        sanitized_message = _sanitize_error_text(err_message or str(err), api_key=api_key)
+
+        raise ResendAPIError(
+            status_code=status_code,
+            error_name=err_name or f"HTTP_{status_code}",
+            error_message=sanitized_message,
+            response_body=sanitized_body,
+        ) from None
+    except urllib.error.URLError as err:
+        sanitized_err = _sanitize_error_text(str(err.reason), api_key=api_key)
+        raise RuntimeError(f"Network error connecting to Resend: {sanitized_err}") from None
 
 
 def _send_via_smtp(
@@ -662,6 +743,14 @@ def dispatch_circular_notifications(
     Returns a summary dict: {"sent": N, "failed": M, "skipped": K}
     """
     config = _get_config()
+    logger.info(
+        "[EmailService] Config check: EMAIL_ENABLED=%s, EMAIL_PROVIDER_API_KEY configured=%s, "
+        "EMAIL_FROM='%s', EMAIL_FROM_NAME='%s'",
+        config["enabled"],
+        bool(config["api_key"] and config["api_key"].strip()),
+        config["from_addr"],
+        config["from_name"],
+    )
     if not config["enabled"]:
         logger.info("[EmailService] Email notifications disabled (EMAIL_ENABLED=false). dispatch skipped.")
         _write_audit(db, circular_id, circular_ref, sent=0, failed=0, skipped=0,
@@ -747,16 +836,24 @@ def dispatch_circular_notifications(
             logger.info("[EmailService] Sent to %s for circular %s", email, circular_ref)
         except Exception as exc:  # noqa: BLE001
             log_entry.status = "FAILED"
-            # Store error without leaking credential details
-            safe_err = str(exc)
-            if any(secret in safe_err for secret in (
-                config.get("api_key", ""), config.get("smtp_password", "")
-            )):
-                safe_err = "[error details redacted — check server logs]"
+            api_key = config.get("api_key", "")
+            smtp_pass = config.get("smtp_password", "")
+
+            if isinstance(exc, ResendAPIError):
+                diag_msg = (
+                    f"Resend HTTP {exc.status_code} | "
+                    f"code: '{exc.error_name}' | "
+                    f"message: '{exc.error_message}'"
+                )
+                if exc.response_body and exc.response_body != exc.error_message:
+                    diag_msg += f" | body: {exc.response_body[:400]}"
+            else:
+                diag_msg = str(exc)
+
+            safe_err = _sanitize_error_text(diag_msg, api_key=api_key, smtp_password=smtp_pass)
             log_entry.error_message = safe_err[:1000]
             failed += 1
-            logger.error("[EmailService] Failed to send to %s: %s", email,
-                         "[error redacted]" if "api_key" in safe_err else safe_err)
+            logger.error("[EmailService] Failed to send to %s: %s", email, safe_err)
 
         db.commit()
 
