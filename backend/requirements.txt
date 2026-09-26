@@ -9,7 +9,7 @@ pydantic-settings>=2.2.0
 python-dotenv>=1.0.1
 
 # ── Database — SQLAlchemy ORM + Alembic Migrations ────────────────────────────
-sqlalchemy>=2.0.0
+sqlalchemy>=2.0.0,<2.1.0
 alembic>=1.13.0
 
 # ── PostgreSQL Driver (primary — Phase 13) ────────────────────────────────────
