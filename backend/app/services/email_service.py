@@ -56,16 +56,16 @@ logger = logging.getLogger(__name__)
 
 def _get_config() -> dict:
     return {
-        "api_key": os.getenv("EMAIL_PROVIDER_API_KEY", ""),
-        "from_addr": os.getenv("EMAIL_FROM", "noreply@vignan.ac.in"),
-        "from_name": os.getenv("EMAIL_FROM_NAME", "CircularFlow AI — Vignan's University"),
+        "api_key": os.getenv("EMAIL_PROVIDER_API_KEY", "").strip(),
+        "from_addr": os.getenv("EMAIL_FROM", "noreply@vignan.ac.in").strip(),
+        "from_name": os.getenv("EMAIL_FROM_NAME", "CircularFlow AI — Vignan's University").strip(),
         "enabled": os.getenv("EMAIL_ENABLED", "true").strip().lower() not in ("false", "0", "no"),
-        "smtp_host": os.getenv("SMTP_HOST", ""),
+        "smtp_host": os.getenv("SMTP_HOST", "").strip(),
         "smtp_port": int(os.getenv("SMTP_PORT", "587")),
-        "smtp_user": os.getenv("SMTP_USER", ""),
+        "smtp_user": os.getenv("SMTP_USER", "").strip(),
         "smtp_password": os.getenv("SMTP_PASSWORD", ""),
         "smtp_tls": os.getenv("SMTP_TLS", "true").strip().lower() not in ("false", "0", "no"),
-        "frontend_url": os.getenv("FRONTEND_URL", "https://circularflow.vignan.ac.in"),
+        "frontend_url": os.getenv("FRONTEND_URL", "https://circularflow.vignan.ac.in").strip(),
     }
 
 
@@ -326,8 +326,9 @@ def _send_via_resend(
     plain: str,
     pdf_bytes: Optional[bytes] = None,
     pdf_filename: Optional[str] = None,
-) -> None:
+) -> dict:
     """Send using Resend REST API (no extra library needed — pure urllib)."""
+    clean_api_key = (api_key or "").strip()
     attachments = []
     if pdf_bytes and pdf_filename:
         import base64
@@ -336,9 +337,12 @@ def _send_via_resend(
             "content": base64.b64encode(pdf_bytes).decode("ascii"),
         }]
 
+    sender = f"{from_name.strip()} <{from_addr.strip()}>" if from_name and from_name.strip() else from_addr.strip()
+    recipient = f"{to_name.strip()} <{to_email.strip()}>" if to_name and to_name.strip() else to_email.strip()
+
     payload: dict = {
-        "from": f"{from_name} <{from_addr}>",
-        "to": [f"{to_name} <{to_email}>" if to_name else to_email],
+        "from": sender,
+        "to": [recipient],
         "subject": subject,
         "html": html,
         "text": plain,
@@ -351,8 +355,9 @@ def _send_via_resend(
         "https://api.resend.com/emails",
         data=data,
         headers={
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {clean_api_key}",
             "Content-Type": "application/json",
+            "User-Agent": "resend-python/2.6.0",
         },
         method="POST",
     )
@@ -364,8 +369,12 @@ def _send_via_resend(
                     status_code=resp.status,
                     error_name="unexpected_status",
                     error_message=f"HTTP {resp.status}",
-                    response_body=_sanitize_error_text(body, api_key=api_key),
+                    response_body=_sanitize_error_text(body, api_key=clean_api_key),
                 )
+            try:
+                return json.loads(body)
+            except Exception:
+                return {"raw": body}
     except urllib.error.HTTPError as err:
         status_code = err.code
         err_body = ""
@@ -918,21 +927,15 @@ def test_resend_connectivity() -> dict:
       - success: bool
       - provider: "resend"
       - status_code: int or None
-      - error/details: sanitized strings (if failed)
+      - error/details/response_body: sanitized strings (if failed)
       - message: str (if successful)
+      - request_info: sanitized request configuration info (NO secrets)
 
-    Never returns or logs EMAIL_PROVIDER_API_KEY or any secret.
+    Never returns or logs EMAIL_PROVIDER_API_KEY, JWT, password, or any secret.
     Creates NO database records.
     """
     config = _get_config()
     api_key = config.get("api_key", "").strip()
-    if not api_key:
-        return {
-            "success": False,
-            "provider": "resend",
-            "status_code": None,
-            "error": "EMAIL_PROVIDER_API_KEY is not configured on the server.",
-        }
 
     from_addr = "onboarding@resend.dev"
     from_name = "CircularFlow AI"
@@ -942,8 +945,31 @@ def test_resend_connectivity() -> dict:
     body_text = "This is a temporary connectivity test for CircularFlow AI."
     html_text = f"<p>{body_text}</p>"
 
+    # Sanitized request configuration info (guaranteed secret-free)
+    request_info = {
+        "endpoint": "https://api.resend.com/emails",
+        "method": "POST",
+        "from": f"{from_name} <{from_addr}>",
+        "to": to_email,
+        "user_agent": "resend-python/2.6.0",
+        "api_key_configured": bool(api_key),
+        "api_key_format_valid": api_key.startswith("re_") if api_key else False,
+        "configured_from_address": config.get("from_addr", ""),
+        "configured_from_name": config.get("from_name", ""),
+        "email_enabled": config.get("enabled", True),
+    }
+
+    if not api_key:
+        return {
+            "success": False,
+            "provider": "resend",
+            "status_code": None,
+            "error": "EMAIL_PROVIDER_API_KEY is not configured on the server.",
+            "request_info": request_info,
+        }
+
     try:
-        _send_via_resend(
+        resp_data = _send_via_resend(
             api_key=api_key,
             from_addr=from_addr,
             from_name=from_name,
@@ -953,12 +979,17 @@ def test_resend_connectivity() -> dict:
             html=html_text,
             plain=body_text,
         )
-        return {
+        email_id = resp_data.get("id") if isinstance(resp_data, dict) else None
+        res = {
             "success": True,
             "provider": "resend",
             "status_code": 200,
             "message": "Test email successfully accepted by Resend API.",
+            "request_info": request_info,
         }
+        if email_id:
+            res["email_id"] = email_id
+        return res
     except ResendAPIError as exc:
         safe_msg = _sanitize_error_text(exc.error_message, api_key=api_key)
         safe_body = _sanitize_error_text(exc.response_body, api_key=api_key)
@@ -968,6 +999,8 @@ def test_resend_connectivity() -> dict:
             "status_code": exc.status_code,
             "error_code": exc.error_name,
             "error": safe_msg or f"HTTP {exc.status_code}",
+            "response_body": safe_body[:500] if safe_body else None,
+            "request_info": request_info,
         }
         if safe_body and safe_body != safe_msg:
             res["details"] = safe_body[:400]
@@ -979,5 +1012,6 @@ def test_resend_connectivity() -> dict:
             "provider": "resend",
             "status_code": None,
             "error": safe_err,
+            "request_info": request_info,
         }
 

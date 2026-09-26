@@ -137,7 +137,7 @@ class Settings:
     # ── Phase 20: Email Notification System ──────────────────────────────────
     # Credentials are read-only from env — never hardcoded, never logged.
     EMAIL_ENABLED: bool = os.getenv("EMAIL_ENABLED", "true").strip().lower() not in ("false", "0", "no")
-    EMAIL_PROVIDER_API_KEY: str = os.getenv("EMAIL_PROVIDER_API_KEY", "")
+    EMAIL_PROVIDER_API_KEY: str = os.getenv("EMAIL_PROVIDER_API_KEY", "").strip()
     EMAIL_FROM: str = os.getenv("EMAIL_FROM", "noreply@vignan.ac.in")
     EMAIL_FROM_NAME: str = os.getenv("EMAIL_FROM_NAME", "CircularFlow AI — Vignan's University")
     SMTP_HOST: str = os.getenv("SMTP_HOST", "")
